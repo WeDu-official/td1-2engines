@@ -131,7 +131,7 @@ def _time_difference(start, end, unit_factor, tz_s=0, tz_e=0, input_utc=True,out
     end_tai   = _timestampinner(*end, count_ls_param=count_ls_param, input_utc=input_utc,input_tt=False,output_tt=False, UTDLS=UTDLS)
     delta = Fraction(end_tai - start_tai - (tz_e - tz_s) * 3600)
     if output_tt: delta = delta + TT_TAI_OFFSET_SECONDS
-    return delta / Fraction(1,unit_factor)
+    return delta / Fraction(unit_factor)
 def _seconds_in_year(y=None, custom_year=None, leap_year=None,uniform_year=False,tropical_year=False):
     if tropical_year: return Fraction(Fraction(3652421896698,10000000000) * 86400)
     if custom_year is not None: return custom_year
