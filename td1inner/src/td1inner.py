@@ -1,11 +1,26 @@
-#THIS IS timediffz (fractionals mode) - made by wedu_official
+#THIS IS timediffz (fractions mode) - made by wedu_official
 import sys
 # noinspection PyUnresolvedReferences
 from fractions import Fraction #python
 import requests, bisect
+from decimal import Decimal,localcontext
 sys.set_int_max_str_digits(0)
 TT_TAI_OFFSET_SECONDS = Fraction(32184, 1000)
-
+def _relativistic_fractional_rate(altitude_m=20200000, v_m_s=3874): #3874 is speed of the GPS
+    G = Fraction(667430, 10 ** 16)  # 6.67430e-11
+    M = Fraction(5972 * 10 ** 24, 10 ** 3)  # 5.972e24
+    c = Fraction(299792458)
+    R_EARTH = Fraction(6371 * 1000)
+    r = R_EARTH + Fraction(altitude_m)
+    if v_m_s is None:
+        with localcontext() as ctx:
+            ctx.prec = 100
+            v = Fraction(G * M / r).to_decimal().sqrt()
+    else:
+        v = Decimal(v_m_s)
+    grav_term = G * M * (1 / R_EARTH - 1 / r) / (c * c)
+    vel_term = (v * v) / (2 * (c * c))
+    return grav_term - vel_term
 _LEAP_SECOND_DAYNUMS = [Fraction(4882999, 2), Fraction(4883367, 2), Fraction(4884097, 2), Fraction(4884827, 2), Fraction(4885557, 2), Fraction(4886289, 2), Fraction(4887019, 2), Fraction(4887749, 2), Fraction(4888479, 2), Fraction(4889573, 2), Fraction(4890303, 2), Fraction(4891033, 2), Fraction(4892495, 2), Fraction(4894323, 2), Fraction(4895785, 2), Fraction(4896515, 2), Fraction(4897609, 2), Fraction(4898339, 2), Fraction(4899069, 2), Fraction(4900167, 2), Fraction(4901261, 2), Fraction(4902359, 2), Fraction(4907473, 2), Fraction(4909665, 2), Fraction(4912219, 2), Fraction(4914409, 2), Fraction(4915509, 2)]
 _MONTH_MAP = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
 def _day_number(y, m, d, h=0, mi=0, s=0, sub_seconds=0, sub_unit_depth=10**6):
@@ -58,7 +73,8 @@ def _tai_to_otherformats(count_ls_param=False, output_tt=False, count_ls_param_p
 def _timestampinner(y, m, d, h=0, mi=0, s=0, sub_seconds=0, sub_unit_depth=10**6,
                     count_ls_param=True, UTDLS=False,
                     input_utc=True, input_tt=False, output_tt=False,
-                    unix_epoch=False, custom_epoch_as_utc=True,custom_epoch_as_tt=False, custom_epoch=None):
+                    unix_epoch=False, custom_epoch_as_utc=True,custom_epoch_as_tt=False, custom_epoch=None,
+                    apply_gps_rel=False,altitude_m=20200000,v_m_s=3874):
     jd_input = Fraction(_day_number(y, m, d, h, mi, s, sub_seconds, sub_unit_depth))
     if unix_epoch: jd_epoch = Fraction(_day_number(1970, 1, 1))
     elif custom_epoch is not None: jd_epoch = Fraction(_day_number(*custom_epoch))
@@ -80,7 +96,25 @@ def _timestampinner(y, m, d, h=0, mi=0, s=0, sub_seconds=0, sub_unit_depth=10**6
     tai_seconds = base_seconds + input_offset - epoch_offset
     out_offset = Fraction(_tai_to_otherformats(count_ls_param=count_ls_param, output_tt=output_tt, count_ls_param_pra=[y, m, d, UTDLS]))
     result_seconds = tai_seconds + out_offset
+    if apply_gps_rel:
+        relativistic_correction = _relativistic_fractional_rate(altitude_m,v_m_s)
+        result_seconds += relativistic_correction
     return result_seconds
+def _time_difference(start, end, unit_factor, tz_s=0, tz_e=0, input_utc=True,output_tt=False,count_ls_param=True, UTDLS=False,apply_gps_rel_s=False,
+    apply_gps_rel_e=False,altitude_m_s=20200000,altitude_m_e=20200000,v_m_s_s=3874,v_m_s_e=3874):
+    start_tai = _timestampinner(*start, count_ls_param=count_ls_param, input_utc=input_utc,input_tt=False,output_tt=False, UTDLS=UTDLS,apply_gps_rel=apply_gps_rel_s,altitude_m=altitude_m_s,v_m_s=v_m_s_s)
+    end_tai   = _timestampinner(*end, count_ls_param=count_ls_param, input_utc=input_utc,input_tt=False,output_tt=False, UTDLS=UTDLS,apply_gps_rel=apply_gps_rel_e,altitude_m=altitude_m_e,v_m_s=v_m_s_e)
+    delta = Fraction(end_tai - start_tai - (tz_e - tz_s) * 3600)
+    if output_tt: delta = delta + TT_TAI_OFFSET_SECONDS
+    return delta / Fraction(unit_factor)
+def _seconds_in_year(y=None, custom_year=None, leap_year=None,uniform_year=False,tropical_year=False):
+    if tropical_year: return Fraction(Fraction(3652421896698,10000000000) * 86400)
+    if custom_year is not None: return custom_year
+    if uniform_year: return Fraction(Fraction(3652425,10000) * 86400)
+    if leap_year is None:
+        if y is None: raise ValueError("Need year y or leap_year/custom_year/tropical_year/preleptic to compute seconds")
+        leap_year = (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0))
+    return (366 if leap_year else 365) * 86400
 def _days_in_month(y, m):
     if m == 2:
         is_leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
@@ -125,20 +159,6 @@ def _yearscalner(s, e):
     if is_negative:
         result *= -1
     return result
-def _time_difference(start, end, unit_factor, tz_s=0, tz_e=0, input_utc=True,output_tt=False,count_ls_param=True, UTDLS=False):
-    start_tai = _timestampinner(*start, count_ls_param=count_ls_param, input_utc=input_utc,input_tt=False,output_tt=False, UTDLS=UTDLS)
-    end_tai   = _timestampinner(*end, count_ls_param=count_ls_param, input_utc=input_utc,input_tt=False,output_tt=False, UTDLS=UTDLS)
-    delta = Fraction(end_tai - start_tai - (tz_e - tz_s) * 3600)
-    if output_tt: delta = delta + TT_TAI_OFFSET_SECONDS
-    return delta / Fraction(unit_factor)
-def _seconds_in_year(y=None, custom_year=None, leap_year=None,uniform_year=False,tropical_year=False):
-    if tropical_year: return Fraction(Fraction(3652421896698,10000000000) * 86400)
-    if custom_year is not None: return custom_year
-    if uniform_year: return Fraction(Fraction(3652425,10000) * 86400)
-    if leap_year is None:
-        if y is None: raise ValueError("Need year y or leap_year/custom_year/tropical_year/preleptic to compute seconds")
-        leap_year = (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0))
-    return (366 if leap_year else 365) * 86400
 def _get_year_seconds(y, leap_year=None, uniform_year=False, tropical_year=False, custom_year=None):
     return _seconds_in_year(y=y, leap_year=leap_year, uniform_year=uniform_year, tropical_year=tropical_year, custom_year=custom_year)
 def _seconds_in_month(y, m):
@@ -165,7 +185,8 @@ def _months_piecewise(s, e, tz_s=0, tz_e=0,
                       UTDLS=False, count_ls_param=True,
                       use_date_in_leapyears_checking=False,
                       year_for_leapyears_checking=None,
-                      reference_year_for_scaling=None):
+                      reference_year_for_scaling=None,apply_gps_rel_s=False,
+    apply_gps_rel_e=False,altitude_m_s=20200000,altitude_m_e=20200000,v_m_s_s=3874,v_m_s_e=3874):
     """Compute difference between two timestamps in months (piecewise), fully continuous (first, mid, last)."""
 
     neg = False
@@ -187,7 +208,8 @@ def _months_piecewise(s, e, tz_s=0, tz_e=0,
             s, e, unit_factor=1,
             tz_s=tz_s, tz_e=tz_e,
             input_utc=input_utc, output_tt=output_tt,
-            count_ls_param=count_ls_param, UTDLS=UTDLS
+            count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e
         )
         return -num / denom if neg else num / denom
 
@@ -204,7 +226,8 @@ def _months_piecewise(s, e, tz_s=0, tz_e=0,
         s, end_s, unit_factor=1,
         tz_s=tz_s, tz_e=tz_s,
         input_utc=input_utc, output_tt=output_tt,
-        count_ls_param=count_ls_param, UTDLS=UTDLS
+        count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e
     ) / denom_first
 
     # === Last segment (from start of its month → e) ===
@@ -220,8 +243,8 @@ def _months_piecewise(s, e, tz_s=0, tz_e=0,
         start_e, e, unit_factor=1,
         tz_s=tz_e, tz_e=tz_e,
         input_utc=input_utc, output_tt=output_tt,
-        count_ls_param=count_ls_param, UTDLS=UTDLS
-    ) / denom_last
+        count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e) / denom_last
     if s[1] == 12:
         mid_start = (s[0] + 1, 1, 1, 0, 0, 0)
     else:
@@ -267,7 +290,8 @@ def _months_piecewise(s, e, tz_s=0, tz_e=0,
 def _years_piecewise(s, e, tz_s=0, tz_e=0,
                      leap_year=None, uniform_year=False, tropical_year=False, custom_year=None,
                      input_utc=True, output_tt=False,
-                     UTDLS=False, count_ls_param=True,year_for_leapyear_checking=None,lock_range_to_reference_year=False):
+                     UTDLS=False, count_ls_param=True,year_for_leapyear_checking=None,lock_range_to_reference_year=False,apply_gps_rel_s=False,
+    apply_gps_rel_e=False,altitude_m_s=20200000,altitude_m_e=20200000,v_m_s_s=3874,v_m_s_e=3874):
     neg = False
     if s > e:
         s, e = e, s
@@ -279,7 +303,8 @@ def _years_piecewise(s, e, tz_s=0, tz_e=0,
                                   tropical_year=tropical_year, custom_year=custom_year)
         num = _time_difference(s, e, unit_factor=1, tz_s=tz_s, tz_e=tz_e,
                                input_utc=input_utc, output_tt=output_tt,
-                               count_ls_param=count_ls_param, UTDLS=UTDLS)
+                               count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e)
         return -num / denom if neg else num / denom
     # Fraction of first year
     end_s = (s[0], 12, 31, 23, 59, 60)
@@ -287,14 +312,16 @@ def _years_piecewise(s, e, tz_s=0, tz_e=0,
                                     tropical_year=tropical_year, custom_year=custom_year)
     first_part = _time_difference(s, end_s, unit_factor=1, tz_s=tz_s, tz_e=tz_s,
                                   input_utc=input_utc, output_tt=output_tt,
-                                  count_ls_param=count_ls_param, UTDLS=UTDLS) / denom_first
+                                  count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e) / denom_first
     # Fraction of last year
     start_e = (e[0], 1, 1, 0, 0, 0)
     denom_last = _get_year_seconds(e[0] if year_for_leapyear_checking is None else year_for_leapyear_checking, leap_year=leap_year, uniform_year=uniform_year,
                                    tropical_year=tropical_year, custom_year=custom_year)
     last_part = _time_difference(start_e, e, unit_factor=1, tz_s=tz_e, tz_e=tz_e,
                                  input_utc=input_utc, output_tt=output_tt,
-                                 count_ls_param=count_ls_param, UTDLS=UTDLS) / denom_last
+                                 count_ls_param=count_ls_param, UTDLS=UTDLS,apply_gps_rel_s=apply_gps_rel_s,
+        apply_gps_rel_e=apply_gps_rel_e,altitude_m_s=altitude_m_s,altitude_m_e=altitude_m_e,v_m_s_s=v_m_s_s,v_m_s_e=v_m_s_e) / denom_last
     if lock_range_to_reference_year:
         full = 0  # When locked to reference year, no full years in between
     else:
