@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "td1inner"
-version = "1.0.7"
+version = "1.0.8"
 authors = [
   { name="WeDu-official", email="fplu.the.founder@gmail.com" },
 ]

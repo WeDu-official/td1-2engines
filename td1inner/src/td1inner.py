@@ -15,9 +15,9 @@ def _relativistic_fractional_rate(altitude_m=20200000, v_m_s=3874): #3874 is spe
     if v_m_s is None:
         with localcontext() as ctx:
             ctx.prec = 100
-            v = Fraction(G * M / r).to_decimal().sqrt()
+            v = Fraction.from_decimal(Fraction(G * M / r).to_decimal().sqrt())
     else:
-        v = Decimal(v_m_s)
+        v = Fraction.from_decimal(Decimal(v_m_s))
     grav_term = G * M * (1 / R_EARTH - 1 / r) / (c * c)
     vel_term = (v * v) / (2 * (c * c))
     return grav_term - vel_term
